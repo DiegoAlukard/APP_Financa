@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>Controle Financeiro</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        html, body {
+            touch-action: pan-x pan-y;
+            overscroll-behavior: none;
+            overflow: hidden;
+            height: 100%;
+            width: 100%;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex justify-center items-center h-[100dvh] w-screen overflow-hidden sm:p-2 select-none">
+
+    <!-- TELA DE BLOQUEIO POR SENHA -->
+    <div id="tela-bloqueio" class="fixed inset-0 z-50 bg-slate-950 flex justify-center items-center p-4">
+        <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-5 text-center">
+            <div class="w-16 h-16 mx-auto rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-emerald-400 text-2xl shadow-inner">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-slate-100">Controle Financeiro</h1>
+                <p class="text-sm text-slate-400 mt-1">Digite a senha de acesso</p>
+            </div>
+            <div class="space-y-3">
+                <input type="password" id="input-senha-acesso" inputmode="numeric" maxlength="10" placeholder="••••••" onkeydown="if(event.key==='Enter') verificarSenhaAcesso()" class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3.5 text-center text-2xl tracking-[0.4em] font-bold text-slate-100 focus:outline-none focus:border-blue-500">
+                <p id="msg-erro-senha" class="text-sm text-rose-400 font-medium hidden">Senha incorreta. Tente novamente.</p>
+                <button onclick="verificarSenhaAcesso()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl text-base transition shadow-lg shadow-blue-600/20 flex items-center justify-center space-x-2">
+                    <i class="fa-solid fa-unlock-keyhole"></i> <span>Desbloquear</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="w-full max-w-md bg-slate-900 sm:border sm:border-slate-800 sm:rounded-2xl shadow-2xl flex flex-col h-full sm:h-[820px] sm:max-h-[96dvh] overflow-hidden">
+        
+        <!-- Bloco de Topo FIXO: Mês e Resumo -->
+        <div class="shrink-0 p-4 border-b border-slate-800 bg-slate-900">
+            <div class="flex items-center justify-center space-x-2.5 mb-3">
+                <label for="dd-mes" class="text-base font-bold text-slate-300">Mês:</label>
+                <select id="dd-mes" onchange="mudarMes(this.value)" class="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-base text-slate-100 font-bold focus:outline-none focus:border-blue-500 shadow-md cursor-pointer text-center">
+                </select>
+            </div>
+            <div class="space-y-1.5 text-base bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80">
+                <div id="txt-receitas" class="text-emerald-400 font-medium flex justify-between"><span>Receitas:</span> <span class="font-bold">R$ 0,00</span></div>
+                <div id="txt-despesas" class="text-rose-400 font-medium flex justify-between"><span>Despesas:</span> <span class="font-bold">R$ 0,00</span></div>
+                <div id="txt-saldo" class="text-lg font-bold text-cyan-300 pt-1.5 border-t border-slate-800 flex justify-between"><span>Saldo:</span> <span class="font-bold">R$ 0,00</span></div>
+            </div>
+        </div>
+
+        <!-- Corpo Central ROLÁVEL (Abas Dinâmicas) -->
+        <div id="corpo-central" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
+        </div>
+
+        <!-- Bloco Inferior FIXO: Avisos + Menu -->
+        <div class="shrink-0 bg-slate-900 border-t border-slate-800">
+            <div class="px-4 py-2.5 bg-slate-950/90 border-b border-slate-800 flex items-center space-x-2 text-sm text-amber-300">
+                <i class="fa-solid fa-circle-info shrink-0 text-base"></i>
+                <span id="txt-aviso" class="truncate font-medium">Conectando ao Firebase (Tempo Real)...</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 p-3">
+                <button onclick="acaoBotaoEsquerdo()" id="btn-tab-principal" class="bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md">
+                    <i class="fa-solid fa-house text-sm"></i> <span>Principal</span>
+                </button>
+                <button onclick="acaoBotaoCentral()" id="btn-tab-adicionar" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5">
+                    <i class="fa-solid fa-plus text-sm"></i> <span>Adicionar</span>
+                </button>
+                <button onclick="mudarAba('configurar')" id="btn-tab-configurar" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5">
+                    <i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { initializeFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // --- CONTROLE DE SENHA (PADRÃO: 301521 | VALIDADE: 7 DIAS) ---
+        const SENHA_PADRAO = "301521";
+        const CHAVE_AUTH = "app_financa_ultimo_acesso";
+        const UMA_SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
+
+        function checarAcesso() {
+            const ultimoAcesso = localStorage.getItem(CHAVE_AUTH);
+            const agora = Date.now();
+            const telaBloqueio = document.getElementById("tela-bloqueio");
+
+            if (ultimoAcesso && (agora - parseInt(ultimoAcesso, 10)) < UMA_SEMANA_MS) {
+                telaBloqueio.classList.add("hidden");
+            } else {
+                telaBloqueio.classList.remove("hidden");
+                setTimeout(() => document.getElementById("input-senha-acesso")?.focus(), 100);
+            }
+        }
+
+        window.verificarSenhaAcesso = function() {
+            const input = document.getElementById("input-senha-acesso");
+            const erro = document.getElementById("msg-erro-senha");
+            if (input.value === SENHA_PADRAO) {
+                localStorage.setItem(CHAVE_AUTH, String(Date.now()));
+                input.value = "";
+                erro.classList.add("hidden");
+                document.getElementById("tela-bloqueio").classList.add("hidden");
+            } else {
+                erro.classList.remove("hidden");
+                input.value = "";
+                input.focus();
+            }
+        }
+
+        window.bloquearAppAgora = function() {
+            localStorage.removeItem(CHAVE_AUTH);
+            checarAcesso();
+        }
+
+        checarAcesso();
+
+        document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && ['+', '-', '=', '0'].includes(e.key)) e.preventDefault();
+        });
+        document.addEventListener('gesturestart', (e) => e.preventDefault());
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDgrKwRpOZbuLe_FjYbXSjCcHVOVa7disY",
+            authDomain: "appfinanca-2e028.firebaseapp.com",
+            projectId: "appfinanca-2e028",
+            storageBucket: "appfinanca-2e028.appfirebasestorage.app",
+            messagingSenderId: "734956292325",
+            appId: "1:734956292325:web:738e071aedb0b8c312ac0c",
+            measurementId: "G-Q8C43YLS8H"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = initializeFirestore(app, { experimentalForceLongPolling: true });
+
+        let lancamentos = [];
+        const dataHoje = new Date();
+        let mesAtual = `${dataHoje.getFullYear()}-${String(dataHoje.getMonth() + 1).padStart(2, '0')}`;
+        let abaAtiva = "principal";
+        let itemParaExcluir = null; // Guarda { firestoreId, descricao, fixo } durante confirmação de exclusão
+        let pressTimer = null;
+        let deferredPrompt = null;
+
+        function avisar(msg, erro = false) {
+            const aviso = document.getElementById("txt-aviso");
+            if (!aviso) return;
+            aviso.textContent = msg;
+            aviso.title = msg;
+            aviso.className = erro ? "truncate font-medium text-rose-400" : "truncate font-medium text-amber-300";
+        }
+
+        // Formata numeral estilo BR sem R$ e sem ",00" quando inteiro (ex: 1000 -> "1.000", 5.5 -> "5,50")
+        window.formatarValorTabela = function(val) {
+            const num = parseFloat(val) || 0;
+            const isInteiro = Math.abs(num % 1) < 0.001;
+            return num.toLocaleString('pt-BR', {
+                minimumFractionDigits: isInteiro ? 0 : 2,
+                maximumFractionDigits: 2
+            });
+        }
+
+        window.formatarMesBr = function(ym) {
+            if (!ym || !ym.includes("-")) return ym;
+            const [ano, mes] = ym.split("-");
+            return `${mes}-${ano}`;
+        }
+
+        window.formatarMesIso = function(br) {
+            if (!br || !br.includes("-")) return br;
+            const [mes, ano] = br.split("-");
+            return `${ano}-${mes}`;
+        }
+
+        // Retorna os itens visíveis no mês selecionado (inclui os avulsos/parcelados do mês + fixos criados neste mês ou anteriores)
+        window.obterItensDoMes = function(ym) {
+            return lancamentos.filter(l => {
+                if (l.fixo === 1 || l.fixo === true) {
+                    return l.ano_mes <= ym;
+                }
+                return l.ano_mes === ym;
+            });
+        }
+
+        window.gerarListaMeses = function() {
+            const anoAtual = new Date().getFullYear();
+            let meses = [];
+            for (let ano = anoAtual - 1; ano <= anoAtual + 2; ano++) {
+                for (let mes = 1; mes <= 12; mes++) {
+                    meses.push(`${ano}-${String(mes).padStart(2, '0')}`);
+                }
+            }
+            lancamentos.forEach(l => { if (l.ano_mes) meses.push(l.ano_mes); });
+            return [...new Set(meses)].sort().reverse();
+        }
+
+        window.atualizarOpcoesMeses = function() {
+            const select = document.getElementById("dd-mes");
+            if (!select) return;
+            const meses = gerarListaMeses();
+            if (!meses.includes(mesAtual)) meses.unshift(mesAtual);
+
+            select.innerHTML = "";
+            meses.forEach(m => {
+                const opt = document.createElement("option");
+                opt.value = m;
+                opt.textContent = formatarMesBr(m);
+                if (m === mesAtual) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+
+        window.mudarMes = function(novoMes) {
+            itemParaExcluir = null;
+            mesAtual = novoMes;
+            renderizarTela();
+        }
+
+        window.atualizarResumo = function() {
+            const itensMes = obterItensDoMes(mesAtual);
+            const receitas = itensMes.filter(l => l.tipo === "Receita").reduce((acc, l) => acc + (parseFloat(l.valor) || 0), 0);
+            const despesas = itensMes.filter(l => l.tipo === "Despesa").reduce((acc, l) => acc + (parseFloat(l.valor) || 0), 0);
+            const saldo = receitas - despesas;
+
+            document.getElementById("txt-receitas").innerHTML = `<span>Receitas:</span> <span class="font-bold">R$ ${receitas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>`;
+            document.getElementById("txt-despesas").innerHTML = `<span>Despesas:</span> <span class="font-bold">R$ ${despesas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>`;
+            
+            const txtSaldo = document.getElementById("txt-saldo");
+            txtSaldo.innerHTML = `<span>Saldo:</span> <span class="font-bold">R$ ${saldo.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>`;
+            txtSaldo.className = saldo >= 0 ? "text-lg font-bold text-cyan-300 pt-1.5 border-t border-slate-800 flex justify-between" : "text-lg font-bold text-rose-400 pt-1.5 border-t border-slate-800 flex justify-between";
+        }
+
+        window.acaoBotaoEsquerdo = function() {
+            if (itemParaExcluir) {
+                itemParaExcluir = null;
+                avisar("Exclusão cancelada.");
+                renderizarTela();
+            } else if (abaAtiva === "adicionar") {
+                avisar("Lançamento cancelado.");
+                mudarAba("principal");
+            } else {
+                mudarAba("principal");
+            }
+        }
+
+        window.acaoBotaoCentral = function() {
+            if (itemParaExcluir) {
+                confirmarExclusaoItem();
+            } else if (abaAtiva === "adicionar") {
+                salvarLancamento();
+            } else {
+                mudarAba("adicionar");
+            }
+        }
+
+        window.atualizarBotoesMenu = function() {
+            const btnEsq = document.getElementById("btn-tab-principal");
+            const btnCen = document.getElementById("btn-tab-adicionar");
+            const btnDir = document.getElementById("btn-tab-configurar");
+            if (!btnEsq || !btnCen || !btnDir) return;
+
+            if (itemParaExcluir) {
+                btnEsq.className = "bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
+
+                btnCen.className = "bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnCen.innerHTML = `<i class="fa-solid fa-trash text-sm"></i> <span>Excluir</span>`;
+
+                btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
+            } else if (abaAtiva === "adicionar") {
+                btnEsq.className = "bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
+
+                btnCen.className = "bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnCen.innerHTML = `<i class="fa-solid fa-check text-sm"></i> <span>Confirmar</span>`;
+
+                btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
+            } else {
+                btnEsq.className = abaAtiva === "principal"
+                    ? "bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnEsq.innerHTML = `<i class="fa-solid fa-house text-sm"></i> <span>Principal</span>`;
+
+                btnCen.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnCen.innerHTML = `<i class="fa-solid fa-plus text-sm"></i> <span>Adicionar</span>`;
+
+                btnDir.className = abaAtiva === "configurar"
+                    ? "bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
+            }
+        }
+
+        window.mudarAba = function(novaAba) {
+            itemParaExcluir = null;
+            abaAtiva = novaAba;
+            atualizarBotoesMenu();
+            renderizarTela();
+        }
+
+        // Eventos de Toque Longo (Segurar por 600ms para selecionar exclusão)
+        window.iniciarPressaoItem = function(firestoreId) {
+            clearTimeout(pressTimer);
+            pressTimer = setTimeout(() => {
+                const item = lancamentos.find(l => l.firestoreId === firestoreId);
+                if (!item) return;
+                itemParaExcluir = item;
+                if (navigator.vibrate) navigator.vibrate(40);
+                const avisoExtra = item.fixo ? " (Fixo: removerá de todos os meses)" : "";
+                avisar(`Excluir "${item.descricao}"${avisoExtra}?`, true);
+                renderizarTela();
+            }, 600);
+        }
+
+        window.cancelarPressaoItem = function() {
+            clearTimeout(pressTimer);
+        }
+
+        window.renderizarTela = function() {
+            atualizarResumo();
+            atualizarOpcoesMeses();
+            atualizarBotoesMenu();
+            const corpo = document.getElementById("corpo-central");
+            if (!corpo) return;
+            corpo.innerHTML = "";
+
+            if (abaAtiva === "principal") {
+                const itensMes = obterItensDoMes(mesAtual);
+                
+                if (itensMes.length === 0) {
+                    corpo.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-slate-400 text-base text-center p-4">
+                        <i class="fa-regular fa-folder-open text-4xl mb-3 text-slate-600"></i>
+                        Nenhum lançamento em ${formatarMesBr(mesAtual)}.
+                    </div>`;
+                    return;
+                }
+
+                let html = `
+                    <div class="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-800/90 text-slate-200 uppercase text-xs">
+                                <tr>
+                                    <th class="py-2.5 px-2">Tipo</th>
+                                    <th class="py-2.5 px-2">Descrição</th>
+                                    <th class="py-2.5 px-2">Valor</th>
+                                    <th class="py-2.5 px-2">Pag.</th>
+                                    <th class="py-2.5 px-2 text-center">Pago</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800/70">
+                `;
+
+                itensMes.forEach(item => {
+                    const corTipo = item.tipo === "Receita" ? "text-emerald-400 font-bold" : "text-rose-400 font-bold";
+                    const iconeFixo = item.fixo ? `<i class="fa-solid fa-repeat text-[10px] text-cyan-400 mr-1" title="Fixo"></i>` : "";
+                    const formaPgto = item.tipo === "Despesa" && item.forma_pagamento ? item.forma_pagamento : "-";
+                    const pagoTxt = item.tipo === "Despesa" ? (item.pago ? "Sim" : "Não") : "-";
+                    const selecionado = itemParaExcluir && itemParaExcluir.firestoreId === item.firestoreId;
+                    const bgLinha = selecionado ? "bg-rose-950/70 ring-1 ring-inset ring-rose-500" : "hover:bg-slate-800/60";
+
+                    html += `
+                        <tr onpointerdown="iniciarPressaoItem('${item.firestoreId}')"
+                            onpointerup="cancelarPressaoItem()"
+                            onpointerleave="cancelarPressaoItem()"
+                            onpointercancel="cancelarPressaoItem()"
+                            oncontextmenu="return false;"
+                            class="${bgLinha} cursor-pointer transition">
+                            <td class="py-2.5 px-2 ${corTipo}">${item.tipo.substring(0,3).toUpperCase()}</td>
+                            <td class="py-2.5 px-2 text-slate-100 font-medium break-words">${iconeFixo}${item.descricao}</td>
+                            <td class="py-2.5 px-2 text-slate-100 font-bold whitespace-nowrap">${formatarValorTabela(item.valor)}</td>
+                            <td class="py-2.5 px-2 text-slate-300">${formaPgto}</td>
+                            <td class="py-2.5 px-2 text-slate-300 text-center">${pagoTxt}</td>
+                        </tr>
+                    `;
+                });
+
+                html += `</tbody></table></div>`;
+                corpo.innerHTML = html;
+
+            } else if (abaAtiva === "adicionar") {
+                corpo.innerHTML = `
+                    <div class="space-y-3">
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">Novo Lançamento</h2>
+                        
+                        <!-- Linha 1: Tipo (Despesa por padrão) + Descrição -->
+                        <div class="grid grid-cols-12 gap-2.5">
+                            <div class="col-span-5">
+                                <label class="text-sm text-slate-300 font-semibold">Tipo</label>
+                                <select id="add-tipo" onchange="toggleDespesaCampos()" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                                    <option value="Despesa" selected>Despesa</option>
+                                    <option value="Receita">Receita</option>
+                                </select>
+                            </div>
+                            <div class="col-span-7">
+                                <label class="text-sm text-slate-300 font-semibold">Descrição</label>
+                                <input type="text" id="add-desc" placeholder="Ex: Luz, Mercado" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                            </div>
+                        </div>
+
+                        <!-- Linha 2: Valor + Modo de Lançamento -->
+                        <div class="grid grid-cols-12 gap-2.5">
+                            <div class="col-span-5">
+                                <label class="text-sm text-slate-300 font-semibold">Valor</label>
+                                <input type="number" step="0.01" inputmode="decimal" id="add-valor" placeholder="0,00" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                            </div>
+                            <div class="col-span-7">
+                                <label class="text-sm text-slate-300 font-semibold">Modo de Lançamento</label>
+                                <select id="add-modo" onchange="toggleParcelasCampo()" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                                    <option value="avulso">Avulso (só este mês)</option>
+                                    <option value="parcelado">Parcelado (X vezes)</option>
+                                    <option value="fixo">Fixo (sem limite)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Campo Condicional de Parcelas -->
+                        <div id="campo-parcelas" class="hidden bg-slate-950/50 p-3 rounded-xl border border-slate-800">
+                            <label class="text-sm text-slate-300 font-semibold">Quantidade de Meses / Parcelas</label>
+                            <input type="number" min="2" max="120" inputmode="numeric" id="add-parcelas" value="2" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                        </div>
+                        
+                        <!-- Linha 3 (Despesa - Visível por padrão): Forma de Pagamento + Pago -->
+                        <div id="campos-despesa" class="space-y-3 bg-slate-950/50 p-3.5 rounded-xl border border-slate-800">
+                            <div>
+                                <label class="text-sm text-slate-300 font-semibold">Forma de Pagamento</label>
+                                <select id="add-forma" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                                    <option value="Crédito">Crédito</option>
+                                    <option value="Débito">Débito</option>
+                                    <option value="Vale">Vale</option>
+                                    <option value="Dinheiro">Dinheiro</option>
+                                </select>
+                            </div>
+                            <label for="add-pago" class="flex items-center space-x-2.5 pt-1 cursor-pointer">
+                                <input type="checkbox" id="add-pago" class="w-5 h-5 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-0">
+                                <span class="text-base text-slate-200 font-semibold">Pago</span>
+                            </label>
+                        </div>
+                    </div>
+                `;
+            } else if (abaAtiva === "configurar") {
+                corpo.innerHTML = `
+                    <div class="space-y-4">
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">Configurações e Dados</h2>
+                        
+                        <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                            <p class="text-sm text-slate-200 font-semibold">Aplicativo (PWA) e Segurança</p>
+                            <div class="grid grid-cols-2 gap-2.5">
+                                <button onclick="instalarApp()" class="bg-emerald-600 hover:bg-emerald-500 text-white py-3 px-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md">
+                                    <i class="fa-solid fa-mobile-screen-button"></i> <span>Instalar App</span>
+                                </button>
+                                <button onclick="bloquearAppAgora()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 py-3 px-3 rounded-xl text-sm font-bold transition border border-slate-700 flex items-center justify-center space-x-1.5">
+                                    <i class="fa-solid fa-lock"></i> <span>Bloquear Tela</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                            <p class="text-sm text-slate-200 font-semibold">Gerenciar Planilha Excel (.xlsx)</p>
+                            <div class="grid grid-cols-2 gap-2.5">
+                                <button onclick="exportarExcel()" class="bg-slate-800 hover:bg-slate-700 text-slate-100 py-3 px-3 rounded-xl text-sm font-semibold transition border border-slate-700 flex items-center justify-center space-x-1.5">
+                                    <i class="fa-solid fa-file-excel text-emerald-400"></i> <span>Exportar Excel</span>
+                                </button>
+                                <button onclick="importarExcelPrompt()" class="bg-slate-800 hover:bg-slate-700 text-slate-100 py-3 px-3 rounded-xl text-sm font-semibold transition border border-slate-700 flex items-center justify-center space-x-1.5">
+                                    <i class="fa-solid fa-upload text-blue-400"></i> <span>Importar Excel</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                            <p class="text-sm text-slate-200 font-semibold">Backup Completo (JSON)</p>
+                            <div class="grid grid-cols-2 gap-2.5">
+                                <button onclick="exportarBackup()" class="bg-slate-800 hover:bg-slate-700 text-slate-100 py-3 px-3 rounded-xl text-sm font-semibold transition border border-slate-700 flex items-center justify-center space-x-1.5">
+                                    <i class="fa-solid fa-download text-amber-400"></i> <span>Exportar JSON</span>
+                                </button>
+                                <button onclick="importarBackupPrompt()" class="bg-slate-800 hover:bg-slate-700 text-slate-100 py-3 px-3 rounded-xl text-sm font-semibold transition border border-slate-700 flex items-center justify-center space-x-1.5">
+                                    <i class="fa-solid fa-folder-open text-purple-400"></i> <span>Restaurar JSON</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        window.toggleDespesaCampos = function() {
+            const tipo = document.getElementById("add-tipo").value;
+            const campos = document.getElementById("campos-despesa");
+            if (!campos) return;
+            if (tipo === "Despesa") {
+                campos.classList.remove("hidden");
+            } else {
+                campos.classList.add("hidden");
+            }
+        }
+
+        window.toggleParcelasCampo = function() {
+            const modo = document.getElementById("add-modo").value;
+            const campoParcelas = document.getElementById("campo-parcelas");
+            if (!campoParcelas) return;
+            if (modo === "parcelado") {
+                campoParcelas.classList.remove("hidden");
+            } else {
+                campoParcelas.classList.add("hidden");
+            }
+        }
+
+        // Soma N meses a uma string "YYYY-MM"
+        function somarMeses(ym, adicionar) {
+            const [anoStr, mesStr] = ym.split("-");
+            const data = new Date(parseInt(anoStr, 10), parseInt(mesStr, 10) - 1 + adicionar, 1);
+            return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        window.salvarLancamento = async function() {
+            const tipo = document.getElementById("add-tipo").value;
+            const desc = document.getElementById("add-desc").value.trim();
+            const valorStr = document.getElementById("add-valor").value.replace(",", ".");
+            const modo = document.getElementById("add-modo").value;
+
+            if (!desc || !valorStr) {
+                avisar("Preencha descrição e valor.", true);
+                return;
+            }
+
+            const valor = parseFloat(valorStr);
+            const formaPagamento = tipo === "Despesa" ? document.getElementById("add-forma").value : "";
+            const pago = tipo === "Despesa" && document.getElementById("add-pago").checked ? 1 : 0;
+
+            try {
+                if (modo === "avulso") {
+                    await addDoc(collection(db, "lancamentos"), {
+                        ano_mes: mesAtual,
+                        tipo,
+                        descricao: desc,
+                        valor,
+                        fixo: 0,
+                        forma_pagamento: formaPagamento,
+                        pago
+                    });
+                } else if (modo === "parcelado") {
+                    const qtdParcelas = Math.max(2, parseInt(document.getElementById("add-parcelas").value, 10) || 2);
+                    for (let i = 0; i < qtdParcelas; i++) {
+                        const ym = somarMeses(mesAtual, i);
+                        await addDoc(collection(db, "lancamentos"), {
+                            ano_mes: ym,
+                            tipo,
+                            descricao: `${desc} (${i + 1}/${qtdParcelas})`,
+                            valor,
+                            fixo: 0,
+                            forma_pagamento: formaPagamento,
+                            pago: i === 0 ? pago : 0
+                        });
+                    }
+                } else if (modo === "fixo") {
+                    // Salva um único registro mestre com fixo: 1 (aparece neste mês e em todos os futuros até ser excluído)
+                    await addDoc(collection(db, "lancamentos"), {
+                        ano_mes: mesAtual,
+                        tipo,
+                        descricao: desc,
+                        valor,
+                        fixo: 1,
+                        forma_pagamento: formaPagamento,
+                        pago
+                    });
+                }
+                mudarAba("principal");
+                avisar("Lançamento salvo!");
+            } catch (e) {
+                console.error("Erro ao salvar:", e);
+                avisar(`Erro ao salvar (${e.code}).`, true);
+            }
+        }
+
+        window.confirmarExclusaoItem = async function() {
+            if (!itemParaExcluir) return;
+            const id = itemParaExcluir.firestoreId;
+            itemParaExcluir = null;
+            try {
+                await deleteDoc(doc(db, "lancamentos", id));
+                avisar("Registro excluído.");
+                renderizarTela();
+            } catch (e) {
+                avisar(`Erro ao excluir (${e.code}).`, true);
+                renderizarTela();
+            }
+        }
+
+        window.exportarExcel = function() {
+            if (lancamentos.length === 0) {
+                avisar("Nenhum dado para exportar.", true);
+                return;
+            }
+            const dadosExcel = lancamentos.map(l => ({
+                "Ano-Mês": formatarMesBr(l.ano_mes),
+                Tipo: l.tipo,
+                Descrição: l.descricao,
+                Valor: l.valor,
+                Fixo: l.fixo ? 1 : 0,
+                "Forma de Pagamento": l.forma_pagamento || "",
+                Pago: l.pago ? "Sim" : "Não"
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(dadosExcel);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Lançamentos");
+            XLSX.writeFile(workbook, "financas_export.xlsx");
+            avisar("Planilha Excel exportada!");
+        }
+
+        window.importarExcelPrompt = function() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.xlsx, .xls';
+            input.onchange = e => {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = async event => {
+                    try {
+                        const data = new Uint8Array(event.target.result);
+                        const workbook = XLSX.read(data, {type: 'array'});
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        const json = XLSX.utils.sheet_to_json(worksheet);
+
+                        let importados = 0;
+                        for (const row of json) {
+                            let rawMes = String(row["Ano-Mês"] || row["ano_mes"] || formatarMesBr(mesAtual));
+                            let ano_mes = rawMes.includes("-") && rawMes.indexOf("-") === 2 ? formatarMesIso(rawMes) : rawMes;
+
+                            const tipo = String(row["Tipo"] || "Despesa");
+                            const descricao = String(row["Descrição"] || row["descricao"] || "Importado");
+                            const valor = parseFloat(String(row["Valor"] || 0).replace(",", ".")) || 0;
+                            const fixo = parseInt(row["Fixo"] || 0) ? 1 : 0;
+                            const forma_pagamento = String(row["Forma de Pagamento"] || row["forma_pagamento"] || "");
+                            const pagoStr = String(row["Pago"] || "Não").toLowerCase();
+                            const pago = ["1", "true", "sim", "s", "pago"].includes(pagoStr) ? 1 : 0;
+
+                            await addDoc(collection(db, "lancamentos"), {
+                                ano_mes,
+                                tipo,
+                                descricao,
+                                valor,
+                                fixo,
+                                forma_pagamento,
+                                pago
+                            });
+                            importados++;
+                        }
+                        renderizarTela();
+                        avisar(`${importados} registros importados!`);
+                    } catch (ex) {
+                        avisar("Erro ao processar planilha Excel.", true);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            };
+            input.click();
+        }
+
+        window.exportarBackup = function() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(lancamentos));
+            const dlAnchorElem = document.createElement('a');
+            dlAnchorElem.setAttribute("href", dataStr);
+            dlAnchorElem.setAttribute("download", "financas_backup.json");
+            dlAnchorElem.click();
+            avisar("Backup JSON exportado!");
+        }
+
+        window.importarBackupPrompt = function() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = e => {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = async event => {
+                    try {
+                        const lista = JSON.parse(event.target.result);
+                        for (const item of lista) {
+                            delete item.firestoreId;
+                            await addDoc(collection(db, "lancamentos"), item);
+                        }
+                        renderizarTela();
+                        avisar("Backup JSON restaurado!");
+                    } catch (ex) {
+                        avisar("Erro ao ler arquivo JSON.", true);
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        }
+
+        renderizarTela();
+
+        onSnapshot(collection(db, "lancamentos"), (snapshot) => {
+            lancamentos = [];
+            snapshot.forEach((d) => {
+                lancamentos.push({ firestoreId: d.id, ...d.data() });
+            });
+            renderizarTela();
+            avisar("Sincronizado (Firebase).");
+        }, (error) => {
+            console.error("Erro Firebase:", error);
+            avisar(`Erro Firebase (${error.code}).`, true);
+        });
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').catch(err => {
+                    console.warn('Service Worker não registrado:', err);
+                });
+            });
+        }
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            avisar("Aplicativo pronto para instalar na aba Configurar!");
+        });
+
+        window.instalarApp = async function() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    avisar("Aplicativo instalado!");
+                }
+                deferredPrompt = null;
+            } else {
+                avisar("Use o menu do navegador > 'Instalar aplicativo'.", false);
+            }
+        }
+    </script>
+</body>
+</html>
