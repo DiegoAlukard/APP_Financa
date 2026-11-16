@@ -20,6 +20,16 @@
             height: 100%;
             width: 100%;
         }
+        .draggable-row {
+            cursor: grab;
+        }
+        .draggable-row:active {
+            cursor: grabbing;
+        }
+        .drag-over {
+            border-top: 2px dashed #3b82f6 !important;
+            background-color: rgba(59, 130, 246, 0.1) !important;
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 flex justify-center items-center h-[100dvh] w-screen overflow-hidden sm:p-2 select-none">
@@ -48,12 +58,22 @@
         
         <!-- Bloco de Topo FIXO: Mês e Resumo -->
         <div class="shrink-0 p-4 border-b border-slate-800 bg-slate-900">
-            <div class="flex items-center justify-center space-x-2.5 mb-3">
+            <div class="flex items-center justify-center space-x-2 mb-3">
+                <!-- Botão de Reordenar à esquerda do Mês -->
+                <button onclick="alternarModoReordenar()" id="btn-toggle-reordenar" title="Reordenar Tabela" class="bg-slate-800 hover:bg-slate-700 text-slate-300 w-10 h-10 rounded-xl font-bold flex items-center justify-center transition shadow-md cursor-pointer">
+                    <i class="fa-solid fa-arrow-up-wide-short text-sm"></i>
+                </button>
                 <label for="dd-mes" class="text-base font-bold text-slate-300">Mês:</label>
                 <select id="dd-mes" onchange="mudarMes(this.value)" class="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-base text-slate-100 font-bold focus:outline-none focus:border-blue-500 shadow-md cursor-pointer text-center">
                 </select>
+                <!-- Botão + em verde para aba de Investimentos -->
+                <button onclick="abrirInvestimentos()" title="Gerenciar Investimentos" class="bg-emerald-600 hover:bg-emerald-500 text-white w-10 h-10 rounded-xl font-bold flex items-center justify-center transition shadow-md cursor-pointer">
+                    <i class="fa-solid fa-plus text-base"></i>
+                </button>
             </div>
-            <div class="space-y-1.5 text-base bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80">
+            
+            <!-- Resumo Dinâmico (Finanças ou Investimentos) -->
+            <div id="bloco-resumo-topo" class="space-y-1.5 text-base bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80">
                 <div id="txt-receitas" class="text-emerald-400 font-medium flex justify-between"><span>Receitas:</span> <span class="font-bold">R$ 0,00</span></div>
                 <div id="txt-despesas" class="text-rose-400 font-medium flex justify-between"><span>Despesas:</span> <span class="font-bold">R$ 0,00</span></div>
                 <div id="txt-saldo" class="text-lg font-bold text-cyan-300 pt-1.5 border-t border-slate-800 flex justify-between"><span>Saldo:</span> <span class="font-bold">R$ 0,00</span></div>
@@ -162,18 +182,20 @@
         const db = initializeFirestore(app, { experimentalForceLongPolling: true });
 
         let lancamentos = [];
+        let investimentos = [];
         let backupsNuvem = [];
         const dataHoje = new Date();
         let mesAtual = `${dataHoje.getFullYear()}-${String(dataHoje.getMonth() + 1).padStart(2, '0')}`;
-        let abaAtiva = "principal";
+        let abaAtiva = "principal"; // "principal", "adicionar", "configurar", "investimentos", "adicionar_investimento", "reordenar"
         
-        let colunaOrdenacaoAtual = null;
-        let ordemAscendente = true;
-
-        let itemSelecionado = null; // Item selecionado ao segurar (para Excluir ou Editar)
-        let modoEdicaoId = null;    // ID se estiver editando um item existente
+        let itemSelecionado = null;
+        let itemInvestimentoSelecionado = null;
+        let modoEdicaoId = null;
+        let modoEdicaoInvestimentoId = null;
         let pressTimer = null;
         let deferredPrompt = null;
+
+        let indiceArrastando = null;
 
         function avisar(msg, erro = false) {
             const aviso = document.getElementById("txt-aviso");
@@ -211,16 +233,6 @@
             return `${ano}-${mes}`;
         }
 
-        window.ordenarTabela = function(coluna) {
-            if (colunaOrdenacaoAtual === coluna) {
-                ordemAscendente = !ordemAscendente;
-            } else {
-                colunaOrdenacaoAtual = coluna;
-                ordemAscendente = true;
-            }
-            renderizarTela();
-        }
-
         window.obterItensDoMes = function(ym) {
             let itens = lancamentos.filter(l => {
                 if (l.fixo === 1 || l.fixo === true) {
@@ -229,23 +241,7 @@
                 return l.ano_mes === ym;
             });
 
-            if (colunaOrdenacaoAtual) {
-                itens.sort((a, b) => {
-                    let valA = a[colunaOrdenacaoAtual];
-                    let valB = b[colunaOrdenacaoAtual];
-
-                    if (colunaOrdenacaoAtual === 'valor') {
-                        valA = parseFloat(valA) || 0;
-                        valB = parseFloat(b.valor) || 0;
-                        return ordemAscendente ? valA - valB : valB - valA;
-                    } else {
-                        valA = String(valA || "").toLowerCase();
-                        valB = String(valB || "").toLowerCase();
-                        return ordemAscendente ? valA.localeCompare(valB) : valB.localeCompare(valA);
-                    }
-                });
-            }
-
+            itens.sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
             return itens;
         }
 
@@ -277,35 +273,180 @@
             });
         }
 
+        window.popularSelectMesInicio = function(idSelect, mesSelecionadoDefault = mesAtual) {
+            const select = document.getElementById(idSelect);
+            if (!select) return;
+            const meses = gerarListaMeses();
+            if (!meses.includes(mesSelecionadoDefault)) meses.unshift(mesSelecionadoDefault);
+
+            select.innerHTML = "";
+            meses.forEach(m => {
+                const opt = document.createElement("option");
+                opt.value = m;
+                opt.textContent = formatarMesBr(m);
+                if (m === mesSelecionadoDefault) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+
         window.mudarMes = function(novoMes) {
             itemSelecionado = null;
+            itemInvestimentoSelecionado = null;
             mesAtual = novoMes;
             renderizarTela();
         }
 
-        window.atualizarResumo = function() {
-            const itensMes = obterItensDoMes(mesAtual);
-            const receitas = itensMes.filter(l => l.tipo === "Receita").reduce((acc, l) => acc + (parseFloat(l.valor) || 0), 0);
-            const despesas = itensMes.filter(l => l.tipo === "Despesa").reduce((acc, l) => acc + (parseFloat(l.valor) || 0), 0);
-            const saldo = receitas - despesas;
+        window.abrirInvestimentos = function() {
+            itemSelecionado = null;
+            itemInvestimentoSelecionado = null;
+            modoEdicaoInvestimentoId = null;
+            abaAtiva = "investimentos";
+            renderizarTela();
+        }
 
-            document.getElementById("txt-receitas").innerHTML = `<span>Receitas:</span> <span class="font-bold">R$ ${receitas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>`;
-            document.getElementById("txt-despesas").innerHTML = `<span>Despesas:</span> <span class="font-bold">R$ ${despesas.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>`;
-            
-            const txtSaldo = document.getElementById("txt-saldo");
-            txtSaldo.innerHTML = `<span>Saldo:</span> <span class="font-bold">R$ ${saldo.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>`;
-            txtSaldo.className = saldo >= 0 ? "text-lg font-bold text-cyan-300 pt-1.5 border-t border-slate-800 flex justify-between" : "text-lg font-bold text-rose-400 pt-1.5 border-t border-slate-800 flex justify-between";
+        window.alternarModoReordenar = function() {
+            if (abaAtiva === "reordenar") {
+                abaAtiva = "principal";
+            } else {
+                itemSelecionado = null;
+                abaAtiva = "reordenar";
+            }
+            renderizarTela();
+        }
+
+        // Funções de Drag and Drop Nativo
+        window.aoIniciarArrasto = function(e, index) {
+            indiceArrastando = index;
+            e.dataTransfer.effectAllowed = 'move';
+        }
+
+        window.aoSobreporArrasto = function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const tr = e.currentTarget;
+            tr.classList.add('drag-over');
+        }
+
+        window.aoSairArrasto = function(e) {
+            const tr = e.currentTarget;
+            tr.classList.remove('drag-over');
+        }
+
+        window.aoSoltarItem = function(e, indexDestino) {
+            e.preventDefault();
+            const tr = e.currentTarget;
+            tr.classList.remove('drag-over');
+
+            if (indiceArrastando === null || indiceArrastando === indexDestino) return;
+
+            const itensMes = obterItensDoMes(mesAtual);
+            const itemMovido = itensMes.splice(indiceArrastando, 1)[0];
+            itensMes.splice(indexDestino, 0, itemMovido);
+
+            itensMes.forEach((item, idx) => {
+                item.ordemTemp = idx;
+            });
+
+            indiceArrastando = null;
+            renderizarTela();
+        }
+
+        window.salvarReordenacao = async function() {
+            try {
+                const itensMes = obterItensDoMes(mesAtual);
+                for (let i = 0; i < itensMes.length; i++) {
+                    const item = itensMes[i];
+                    const novaOrdem = (item.ordemTemp !== undefined) ? item.ordemTemp : i;
+                    await updateDoc(doc(db, "lancamentos", item.firestoreId), {
+                        ordem: novaOrdem
+                    });
+                }
+                avisar("Nova ordem salva com sucesso!");
+                abaAtiva = "principal";
+                renderizarTela();
+            } catch (e) {
+                console.error("Erro ao salvar ordem:", e);
+                avisar("Erro ao salvar nova ordem.", true);
+            }
+        }
+
+        window.atualizarResumo = function() {
+            const blocoResumo = document.getElementById("bloco-resumo-topo");
+            const btnReordenar = document.getElementById("btn-toggle-reordenar");
+            if (!blocoResumo) return;
+
+            if (btnReordenar) {
+                if (abaAtiva === "investimentos" || abaAtiva === "adicionar_investimento") {
+                    btnReordenar.classList.add("hidden");
+                } else {
+                    btnReordenar.classList.remove("hidden");
+                    if (abaAtiva === "reordenar") {
+                        btnReordenar.className = "bg-blue-600 text-white w-10 h-10 rounded-xl font-bold flex items-center justify-center transition shadow-md cursor-pointer";
+                    } else {
+                        btnReordenar.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 w-10 h-10 rounded-xl font-bold flex items-center justify-center transition shadow-md cursor-pointer";
+                    }
+                }
+            }
+
+            if (abaAtiva === "investimentos" || abaAtiva === "adicionar_investimento") {
+                const totalInvestido = investimentos.reduce((acc, inv) => acc + (parseFloat(inv.valor) || 0), 0);
+                blocoResumo.innerHTML = `
+                    <div class="text-cyan-300 font-medium flex justify-between"><span>Total em Investimentos:</span> <span class="font-bold">R$ ${totalInvestido.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
+                    <div class="text-xs text-slate-400 pt-1 border-t border-slate-800 flex justify-between"><span>Ativos cadastrados:</span> <span class="font-bold">${investimentos.length}</span></div>
+                `;
+            } else {
+                const itensMes = obterItensDoMes(mesAtual);
+                
+                let receitasGeral = 0;
+                let despesasGeral = 0;
+                let receitasVale = 0;
+                let despesasVale = 0;
+
+                itensMes.forEach(l => {
+                    const valor = parseFloat(l.valor) || 0;
+                    const descLower = String(l.descricao || "").toLowerCase();
+                    const isVale = l.forma_pagamento === "Vale" || descLower.includes("vale");
+
+                    if (l.tipo === "Receita") {
+                        receitasGeral += valor;
+                        if (isVale) receitasVale += valor;
+                    } else {
+                        despesasGeral += valor;
+                        if (isVale) despesasVale += valor;
+                    }
+                });
+
+                const saldoGeral = receitasGeral - despesasGeral;
+                const saldoVale = receitasVale - despesasVale;
+
+                const txtReceitas = `R$ ${receitasGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2})} - R$ ${receitasVale.toLocaleString('pt-BR', {minimumFractionDigits: 2})}`;
+                const txtDespesas = `R$ ${despesasGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2})} - R$ ${despesasVale.toLocaleString('pt-BR', {minimumFractionDigits: 2})}`;
+                const txtSaldo = `R$ ${saldoGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2})} - R$ ${saldoVale.toLocaleString('pt-BR', {minimumFractionDigits: 2})}`;
+
+                blocoResumo.innerHTML = `
+                    <div id="txt-receitas" class="text-emerald-400 font-medium flex justify-between"><span>Receitas:</span> <span class="font-bold">${txtReceitas}</span></div>
+                    <div id="txt-despesas" class="text-rose-400 font-medium flex justify-between"><span>Despesas:</span> <span class="font-bold">${txtDespesas}</span></div>
+                    <div id="txt-saldo" class="text-lg font-bold ${saldoGeral >= 0 ? 'text-cyan-300' : 'text-rose-400'} pt-1.5 border-t border-slate-800 flex justify-between"><span>Saldo:</span> <span class="font-bold">${txtSaldo}</span></div>
+                `;
+            }
         }
 
         window.acaoBotaoEsquerdo = function() {
-            if (itemSelecionado) {
+            if (itemSelecionado || itemInvestimentoSelecionado) {
                 itemSelecionado = null;
+                itemInvestimentoSelecionado = null;
                 avisar("Ação cancelada.");
                 renderizarTela();
-            } else if (abaAtiva === "adicionar") {
+            } else if (abaAtiva === "adicionar" || abaAtiva === "adicionar_investimento" || abaAtiva === "reordenar") {
                 modoEdicaoId = null;
-                avisar("Lançamento cancelado.");
-                mudarAba("principal");
+                modoEdicaoInvestimentoId = null;
+                avisar("Ação cancelada.");
+                if (abaAtiva === "adicionar_investimento") abaAtiva = "investimentos";
+                else abaAtiva = "principal";
+                renderizarTela();
+            } else if (abaAtiva === "investimentos") {
+                abaAtiva = "principal";
+                renderizarTela();
             } else {
                 mudarAba("principal");
             }
@@ -314,8 +455,18 @@
         window.acaoBotaoCentral = function() {
             if (itemSelecionado) {
                 confirmarExclusaoItem();
+            } else if (itemInvestimentoSelecionado) {
+                confirmarExclusaoInvestimento();
+            } else if (abaAtiva === "reordenar") {
+                salvarReordenacao();
             } else if (abaAtiva === "adicionar") {
                 salvarLancamento();
+            } else if (abaAtiva === "adicionar_investimento") {
+                salvarInvestimento();
+            } else if (abaAtiva === "investimentos") {
+                modoEdicaoInvestimentoId = null;
+                abaAtiva = "adicionar_investimento";
+                renderizarTela();
             } else {
                 modoEdicaoId = null;
                 mudarAba("adicionar");
@@ -325,6 +476,11 @@
         window.acaoBotaoDireito = function() {
             if (itemSelecionado) {
                 prepararEdicaoItem();
+            } else if (itemInvestimentoSelecionado) {
+                prepararEdicaoInvestimento();
+            } else if (abaAtiva === "investimentos") {
+                abaAtiva = "principal";
+                renderizarTela();
             } else {
                 mudarAba('configurar');
             }
@@ -336,8 +492,7 @@
             const btnDir = document.getElementById("btn-tab-configurar");
             if (!btnEsq || !btnCen || !btnDir) return;
 
-            if (itemSelecionado) {
-                // Menu ao Segurar o Item: Cancelar | Excluir | Editar
+            if (itemSelecionado || itemInvestimentoSelecionado) {
                 btnEsq.className = "bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
                 btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
 
@@ -346,8 +501,7 @@
 
                 btnDir.className = "bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
                 btnDir.innerHTML = `<i class="fa-solid fa-pen text-sm"></i> <span>Editar</span>`;
-            } else if (abaAtiva === "adicionar") {
-                // Menu Adicionar/Editar Novo Lançamento: Cancelar | Confirmar | Configurar
+            } else if (abaAtiva === "reordenar") {
                 btnEsq.className = "bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
                 btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
 
@@ -356,8 +510,25 @@
 
                 btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
                 btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
+            } else if (abaAtiva === "adicionar" || abaAtiva === "adicionar_investimento") {
+                btnEsq.className = "bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
+
+                btnCen.className = "bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnCen.innerHTML = `<i class="fa-solid fa-check text-sm"></i> <span>Confirmar</span>`;
+
+                btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
+            } else if (abaAtiva === "investimentos") {
+                btnEsq.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnEsq.innerHTML = `<i class="fa-solid fa-house text-sm"></i> <span>Principal</span>`;
+
+                btnCen.className = "bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnCen.innerHTML = `<i class="fa-solid fa-plus text-sm"></i> <span>Adicionar</span>`;
+
+                btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
+                btnDir.innerHTML = `<i class="fa-solid fa-arrow-left text-sm"></i> <span>Voltar</span>`;
             } else {
-                // Menu Padrão
                 btnEsq.className = abaAtiva === "principal"
                     ? "bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
                     : "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
@@ -375,7 +546,9 @@
 
         window.mudarAba = function(novaAba) {
             itemSelecionado = null;
+            itemInvestimentoSelecionado = null;
             if (novaAba !== 'adicionar') modoEdicaoId = null;
+            if (novaAba !== 'adicionar_investimento') modoEdicaoInvestimentoId = null;
             abaAtiva = novaAba;
             if (novaAba === "configurar") carregarBackupsNuvem();
             atualizarBotoesMenu();
@@ -383,6 +556,7 @@
         }
 
         window.iniciarPressaoItem = function(firestoreId) {
+            if (abaAtiva === "reordenar") return;
             clearTimeout(pressTimer);
             pressTimer = setTimeout(() => {
                 const item = lancamentos.find(l => l.firestoreId === firestoreId);
@@ -394,8 +568,32 @@
             }, 600);
         }
 
+        window.iniciarPressaoInvestimento = function(firestoreId) {
+            clearTimeout(pressTimer);
+            pressTimer = setTimeout(() => {
+                const inv = investimentos.find(i => i.firestoreId === firestoreId);
+                if (!inv) return;
+                itemInvestimentoSelecionado = inv;
+                if (navigator.vibrate) navigator.vibrate(40);
+                avisar(`Selecionado: "${inv.descricao}". Escolha Excluir ou Editar.`, false);
+                renderizarTela();
+            }, 600);
+        }
+
         window.cancelarPressaoItem = function() {
             clearTimeout(pressTimer);
+        }
+
+        window.toggleFormaPagamento = function() {
+            const forma = document.getElementById("add-forma").value;
+            const blocoCredito = document.getElementById("bloco-mes-credito");
+            if (!blocoCredito) return;
+            if (forma === "Crédito") {
+                blocoCredito.classList.remove("hidden");
+                popularSelectMesInicio("add-mes-credito", mesAtual);
+            } else {
+                blocoCredito.classList.add("hidden");
+            }
         }
 
         window.prepararEdicaoItem = function() {
@@ -405,7 +603,6 @@
             itemSelecionado = null;
             mudarAba("adicionar");
 
-            // Preenche os campos com os valores atuais
             setTimeout(() => {
                 const tipoEl = document.getElementById("add-tipo");
                 const descEl = document.getElementById("add-desc");
@@ -417,13 +614,29 @@
                 if (tipoEl) tipoEl.value = item.tipo;
                 if (descEl) descEl.value = item.descricao;
                 if (valorEl) valorEl.value = item.valor;
-                if (formaEl) formaEl.value = item.forma_pagamento || "Crédito";
+                if (formaEl) formaEl.value = item.forma_pagamento || "Débito";
                 if (pagoEl) pagoEl.checked = item.pago ? true : false;
                 if (modoEl) {
                     modoEl.value = item.fixo ? "fixo" : "avulso";
-                    modoEl.disabled = true; // Desabilita mudança de modo na edição simples
+                    modoEl.disabled = true;
                 }
-                toggleDespesaCampos();
+                toggleFormaPagamento();
+            }, 50);
+        }
+
+        window.prepararEdicaoInvestimento = function() {
+            if (!itemInvestimentoSelecionado) return;
+            const inv = itemInvestimentoSelecionado;
+            modoEdicaoInvestimentoId = inv.firestoreId;
+            itemInvestimentoSelecionado = null;
+            abaAtiva = "adicionar_investimento";
+            renderizarTela();
+
+            setTimeout(() => {
+                const descEl = document.getElementById("inv-desc");
+                const valorEl = document.getElementById("inv-valor");
+                if (descEl) descEl.value = inv.descricao;
+                if (valorEl) valorEl.value = inv.valor;
             }, 50);
         }
 
@@ -435,7 +648,63 @@
             if (!corpo) return;
             corpo.innerHTML = "";
 
-            if (abaAtiva === "principal") {
+            if (abaAtiva === "investimentos") {
+                if (investimentos.length === 0) {
+                    corpo.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-slate-400 text-base text-center p-4">
+                        <i class="fa-solid fa-chart-line text-4xl mb-3 text-slate-600"></i>
+                        Nenhum investimento cadastrado. Clique em Adicionar.
+                    </div>`;
+                    return;
+                }
+
+                let html = `
+                    <div class="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-800/90 text-slate-200 uppercase text-xs select-none">
+                                <tr>
+                                    <th class="py-2.5 px-3">Descrição</th>
+                                    <th class="py-2.5 px-3 text-right">Valor Total</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800/70">
+                `;
+
+                investimentos.forEach(inv => {
+                    const selecionado = itemInvestimentoSelecionado && itemInvestimentoSelecionado.firestoreId === inv.firestoreId;
+                    const bgLinha = selecionado ? "bg-rose-950/70 ring-1 ring-inset ring-rose-500" : "hover:bg-slate-800/60";
+
+                    html += `
+                        <tr onpointerdown="iniciarPressaoInvestimento('${inv.firestoreId}')"
+                            onpointerup="cancelarPressaoItem()"
+                            onpointerleave="cancelarPressaoItem()"
+                            onpointercancel="cancelarPressaoItem()"
+                            oncontextmenu="return false;"
+                            class="${bgLinha} cursor-pointer transition">
+                            <td class="py-2.5 px-3 text-slate-100 font-medium break-words">${inv.descricao}</td>
+                            <td class="py-2.5 px-3 text-emerald-400 font-bold text-right whitespace-nowrap">R$ ${formatarValorTabela(inv.valor)}</td>
+                        </tr>
+                    `;
+                });
+
+                html += `</tbody></table></div>`;
+                corpo.innerHTML = html;
+
+            } else if (abaAtiva === "adicionar_investimento") {
+                const tituloModo = modoEdicaoInvestimentoId ? "Editar Investimento" : "Novo Investimento";
+                corpo.innerHTML = `
+                    <div class="space-y-3">
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">${tituloModo}</h2>
+                        <div>
+                            <label class="text-sm text-slate-300 font-semibold">Descrição do Ativo</label>
+                            <input type="text" id="inv-desc" placeholder="Ex: Ações, FIIs, Tesouro Direto" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <div>
+                            <label class="text-sm text-slate-300 font-semibold">Valor Total</label>
+                            <input type="number" step="0.01" inputmode="decimal" id="inv-valor" placeholder="0,00" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-emerald-500">
+                        </div>
+                    </div>
+                `;
+            } else if (abaAtiva === "principal" || abaAtiva === "reordenar") {
                 const itensMes = obterItensDoMes(mesAtual);
                 
                 if (itensMes.length === 0) {
@@ -446,42 +715,50 @@
                     return;
                 }
 
-                let iconeSetaTipo = colunaOrdenacaoAtual === 'tipo' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
-                let iconeSetaDesc = colunaOrdenacaoAtual === 'descricao' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
-                let iconeSetaValor = colunaOrdenacaoAtual === 'valor' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
-                let iconeSetaPag = colunaOrdenacaoAtual === 'forma_pagamento' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
-                let iconeSetaPago = colunaOrdenacaoAtual === 'pago' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
+                const isReordenando = abaAtiva === "reordenar";
+                if (isReordenando) {
+                    avisar("Arraste e solte as linhas para ordenar, depois clique em Confirmar.", false);
+                }
 
                 let html = `
                     <div class="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                         <table class="w-full text-left text-sm">
                             <thead class="bg-slate-800/90 text-slate-200 uppercase text-xs select-none">
                                 <tr>
-                                    <th onclick="ordenarTabela('tipo')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Tipo${iconeSetaTipo}</th>
-                                    <th onclick="ordenarTabela('descricao')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Descrição${iconeSetaDesc}</th>
-                                    <th onclick="ordenarTabela('valor')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Valor${iconeSetaValor}</th>
-                                    <th onclick="ordenarTabela('forma_pagamento')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Pag.${iconeSetaPag}</th>
-                                    <th onclick="ordenarTabela('pago')" class="py-2.5 px-2 text-center cursor-pointer hover:text-blue-400 transition">Pago${iconeSetaPago}</th>
+                                    ${isReordenando ? '<th class="py-2.5 px-2 text-center w-10"><i class="fa-solid fa-grip-vertical"></i></th>' : ''}
+                                    <th class="py-2.5 px-2">Tipo</th>
+                                    <th class="py-2.5 px-2">Descrição</th>
+                                    <th class="py-2.5 px-2">Valor</th>
+                                    <th class="py-2.5 px-2">Pag.</th>
+                                    <th class="py-2.5 px-2 text-center">Pago</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-800/70">
                 `;
 
-                itensMes.forEach(item => {
+                itensMes.forEach((item, index) => {
                     const corTipo = item.tipo === "Receita" ? "text-emerald-400 font-bold" : "text-rose-400 font-bold";
                     const iconeFixo = item.fixo ? `<i class="fa-solid fa-repeat text-[10px] text-cyan-400 mr-1" title="Fixo"></i>` : "";
-                    const formaPgto = item.tipo === "Despesa" && item.forma_pagamento ? item.forma_pagamento : "-";
+                    const formaPgto = item.forma_pagamento ? item.forma_pagamento : "-";
                     const pagoTxt = item.tipo === "Despesa" ? (item.pago ? "Sim" : "Não") : "-";
                     const selecionado = itemSelecionado && itemSelecionado.firestoreId === item.firestoreId;
                     const bgLinha = selecionado ? "bg-rose-950/70 ring-1 ring-inset ring-rose-500" : "hover:bg-slate-800/60";
 
+                    const attrsDrag = isReordenando ? `draggable="true" ondragstart="aoIniciarArrasto(event, ${index})" ondragover="aoSobreposArrasto(event)" ondragleave="aoSairArrasto(event)" ondrop="aoSoltarItem(event, ${index})"` : '';
+
                     html += `
-                        <tr onpointerdown="iniciarPressaoItem('${item.firestoreId}')"
+                        <tr ${attrsDrag}
+                            onpointerdown="iniciarPressaoItem('${item.firestoreId}')"
                             onpointerup="cancelarPressaoItem()"
                             onpointerleave="cancelarPressaoItem()"
                             onpointercancel="cancelarPressaoItem()"
                             oncontextmenu="return false;"
-                            class="${bgLinha} cursor-pointer transition">
+                            class="${bgLinha} ${isReordenando ? 'draggable-row' : 'cursor-pointer'} transition">
+                            ${isReordenando ? `
+                                <td class="py-2.5 px-2 text-center text-slate-400">
+                                    <i class="fa-solid fa-grip-vertical"></i>
+                                </td>
+                            ` : ''}
                             <td class="py-2.5 px-2 ${corTipo}">${item.tipo.substring(0,3).toUpperCase()}</td>
                             <td class="py-2.5 px-2 text-slate-100 font-medium break-words">${iconeFixo}${item.descricao}</td>
                             <td class="py-2.5 px-2 text-slate-100 font-bold whitespace-nowrap">${formatarValorTabela(item.valor)}</td>
@@ -503,14 +780,14 @@
                         <div class="grid grid-cols-12 gap-2.5">
                             <div class="col-span-5">
                                 <label class="text-sm text-slate-300 font-semibold">Tipo</label>
-                                <select id="add-tipo" onchange="toggleDespesaCampos()" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                                <select id="add-tipo" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
                                     <option value="Despesa" selected>Despesa</option>
                                     <option value="Receita">Receita</option>
                                 </select>
                             </div>
                             <div class="col-span-7">
                                 <label class="text-sm text-slate-300 font-semibold">Descrição</label>
-                                <input type="text" id="add-desc" placeholder="Ex: Luz, Mercado" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                                <input type="text" id="add-desc" placeholder="Ex: Luz, Mercado, Vale" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
                             </div>
                         </div>
 
@@ -534,16 +811,24 @@
                             <input type="number" min="2" max="120" inputmode="numeric" id="add-parcelas" value="2" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
                         </div>
                         
-                        <div id="campos-despesa" class="space-y-3 bg-slate-950/50 p-3.5 rounded-xl border border-slate-800">
+                        <div class="space-y-3 bg-slate-950/50 p-3.5 rounded-xl border border-slate-800">
                             <div>
-                                <label class="text-sm text-slate-300 font-semibold">Forma de Pagamento</label>
-                                <select id="add-forma" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
-                                    <option value="Crédito">Crédito</option>
-                                    <option value="Débito">Débito</option>
+                                <label class="text-sm text-slate-300 font-semibold">Forma de Pagamento / Conta</label>
+                                <select id="add-forma" onchange="toggleFormaPagamento()" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
+                                    <option value="Débito" selected>Débito</option>
                                     <option value="Vale">Vale</option>
+                                    <option value="Crédito">Crédito</option>
                                     <option value="Dinheiro">Dinheiro</option>
                                 </select>
                             </div>
+
+                            <!-- Mês de início específico para Crédito -->
+                            <div id="bloco-mes-credito" class="hidden pt-1">
+                                <label class="text-sm text-amber-300 font-semibold"><i class="fa-solid fa-calendar-days mr-1"></i> Mês de Início da Fatura / Lançamento</label>
+                                <select id="add-mes-credito" class="w-full mt-1 bg-slate-800 border border-amber-500/50 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-amber-500">
+                                </select>
+                            </div>
+
                             <label for="add-pago" class="flex items-center space-x-2.5 pt-1 cursor-pointer">
                                 <input type="checkbox" id="add-pago" class="w-5 h-5 rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-0">
                                 <span class="text-base text-slate-200 font-semibold">Pago</span>
@@ -551,6 +836,7 @@
                         </div>
                     </div>
                 `;
+                setTimeout(() => toggleFormaPagamento(), 50);
             } else if (abaAtiva === "configurar") {
                 let htmlBackups = '';
                 if (backupsNuvem.length === 0) {
@@ -620,17 +906,6 @@
             }
         }
 
-        window.toggleDespesaCampos = function() {
-            const tipo = document.getElementById("add-tipo").value;
-            const campos = document.getElementById("campos-despesa");
-            if (!campos) return;
-            if (tipo === "Despesa") {
-                campos.classList.remove("hidden");
-            } else {
-                campos.classList.add("hidden");
-            }
-        }
-
         window.toggleParcelasCampo = function() {
             const modo = document.getElementById("add-modo").value;
             const campoParcelas = document.getElementById("campo-parcelas");
@@ -660,12 +935,15 @@
             }
 
             const valor = parseFloat(valorStr);
-            const formaPagamento = tipo === "Despesa" ? document.getElementById("add-forma").value : "";
+            const formaPagamento = document.getElementById("add-forma").value;
             const pago = tipo === "Despesa" && document.getElementById("add-pago").checked ? 1 : 0;
+            const mesBase = (formaPagamento === "Crédito") ? document.getElementById("add-mes-credito").value : mesAtual;
 
             try {
+                const itensAtuais = obterItensDoMes(mesBase);
+                const proximaOrdem = itensAtuais.length > 0 ? Math.max(...itensAtuais.map(i => i.ordem || 0)) + 1 : 0;
+
                 if (modoEdicaoId) {
-                    // Atualiza o item existente
                     await updateDoc(doc(db, "lancamentos", modoEdicaoId), {
                         tipo,
                         descricao: desc,
@@ -677,19 +955,20 @@
                     avisar("Lançamento atualizado!");
                 } else if (modo === "avulso") {
                     await addDoc(collection(db, "lancamentos"), {
-                        ano_mes: mesAtual,
+                        ano_mes: mesBase,
                         tipo,
                         descricao: desc,
                         valor,
                         fixo: 0,
                         forma_pagamento: formaPagamento,
-                        pago
+                        pago,
+                        ordem: proximaOrdem
                     });
                     avisar("Lançamento salvo!");
                 } else if (modo === "parcelado") {
                     const qtdParcelas = Math.max(2, parseInt(document.getElementById("add-parcelas").value, 10) || 2);
                     for (let i = 0; i < qtdParcelas; i++) {
-                        const ym = somarMeses(mesAtual, i);
+                        const ym = somarMeses(mesBase, i);
                         await addDoc(collection(db, "lancamentos"), {
                             ano_mes: ym,
                             tipo,
@@ -697,19 +976,21 @@
                             valor,
                             fixo: 0,
                             forma_pagamento: formaPagamento,
-                            pago: i === 0 ? pago : 0
+                            pago: i === 0 ? pago : 0,
+                            ordem: proximaOrdem + i
                         });
                     }
                     avisar("Lançamento salvo!");
                 } else if (modo === "fixo") {
                     await addDoc(collection(db, "lancamentos"), {
-                        ano_mes: mesAtual,
+                        ano_mes: mesBase,
                         tipo,
                         descricao: desc,
                         valor,
                         fixo: 1,
                         forma_pagamento: formaPagamento,
-                        pago
+                        pago,
+                        ordem: proximaOrdem
                     });
                     avisar("Lançamento salvo!");
                 }
@@ -717,6 +998,40 @@
             } catch (e) {
                 console.error("Erro ao salvar:", e);
                 avisar(`Erro ao salvar (${e.code}).`, true);
+            }
+        }
+
+        window.salvarInvestimento = async function() {
+            const desc = document.getElementById("inv-desc").value.trim();
+            const valorStr = document.getElementById("inv-valor").value.replace(",", ".");
+
+            if (!desc || !valorStr) {
+                avisar("Preencha descrição e valor do investimento.", true);
+                return;
+            }
+
+            const valor = parseFloat(valorStr);
+
+            try {
+                if (modoEdicaoInvestimentoId) {
+                    await updateDoc(doc(db, "investimentos", modoEdicaoInvestimentoId), {
+                        descricao: desc,
+                        valor
+                    });
+                    modoEdicaoInvestimentoId = null;
+                    avisar("Investimento atualizado!");
+                } else {
+                    await addDoc(collection(db, "investimentos"), {
+                        descricao: desc,
+                        valor
+                    });
+                    avisar("Investimento salvo!");
+                }
+                abaAtiva = "investimentos";
+                renderizarTela();
+            } catch (e) {
+                console.error("Erro ao salvar investimento:", e);
+                avisar("Erro ao salvar investimento.", true);
             }
         }
 
@@ -730,6 +1045,20 @@
                 renderizarTela();
             } catch (e) {
                 avisar(`Erro ao excluir (${e.code}).`, true);
+                renderizarTela();
+            }
+        }
+
+        window.confirmarExclusaoInvestimento = async function() {
+            if (!itemInvestimentoSelecionado) return;
+            const id = itemInvestimentoSelecionado.firestoreId;
+            itemInvestimentoSelecionado = null;
+            try {
+                await deleteDoc(doc(db, "investimentos", id));
+                avisar("Investimento excluído.");
+                renderizarTela();
+            } catch (e) {
+                avisar("Erro ao excluir investimento.", true);
                 renderizarTela();
             }
         }
@@ -875,7 +1204,7 @@
                             const descricao = String(row["Descrição"] || row["descricao"] || "Importado");
                             const valor = parseFloat(String(row["Valor"] || 0).replace(",", ".")) || 0;
                             const fixo = parseInt(row["Fixo"] || 0) ? 1 : 0;
-                            const forma_pagamento = String(row["Forma de Pagamento"] || row["forma_pagamento"] || "");
+                            const forma_pagamento = String(row["Forma de Pagamento"] || row["forma_pagamento"] || "Débito");
                             const pagoStr = String(row["Pago"] || "Não").toLowerCase();
                             const pago = ["1", "true", "sim", "s", "pago"].includes(pagoStr) ? 1 : 0;
 
@@ -886,7 +1215,8 @@
                                 valor,
                                 fixo,
                                 forma_pagamento,
-                                pago
+                                pago,
+                                ordem: importados
                             });
                             importados++;
                         }
@@ -937,6 +1267,7 @@
 
         renderizarTela();
 
+        // Listener Lançamentos
         onSnapshot(collection(db, "lancamentos"), (snapshot) => {
             lancamentos = [];
             snapshot.forEach((d) => {
@@ -945,10 +1276,20 @@
             renderizarTela();
             verificarEExecutarBackupSemanal();
             carregarBackupsNuvem();
-            avisar("Sincronizado (Firebase).");
         }, (error) => {
             console.error("Erro Firebase:", error);
             avisar(`Erro Firebase (${error.code}).`, true);
+        });
+
+        // Listener Investimentos
+        onSnapshot(collection(db, "investimentos"), (snapshot) => {
+            investimentos = [];
+            snapshot.forEach((d) => {
+                investimentos.push({ firestoreId: d.id, ...d.data() });
+            });
+            renderizarTela();
+        }, (error) => {
+            console.error("Erro Firebase Investimentos:", error);
         });
 
         if ('serviceWorker' in navigator) {
