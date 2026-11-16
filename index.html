@@ -5,16 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#0f172a">
     <title>Controle Financeiro</title>
-    <!-- Manifesto PWA e Ícone -->
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/svg+xml" href="icon.svg">
     <link rel="apple-touch-icon" href="icon.svg">
-    <!-- Tailwind CSS -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <!-- Ícones FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Biblioteca SheetJS para manipulação de arquivos Excel (.xlsx) no navegador -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
     <style>
         html, body {
             touch-action: pan-x pan-y;
@@ -81,7 +78,7 @@
                 <button onclick="acaoBotaoCentral()" id="btn-tab-adicionar" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5">
                     <i class="fa-solid fa-plus text-sm"></i> <span>Adicionar</span>
                 </button>
-                <button onclick="mudarAba('configurar')" id="btn-tab-configurar" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5">
+                <button onclick="acaoBotaoDireito()" id="btn-tab-configurar" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5">
                     <i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>
                 </button>
             </div>
@@ -91,11 +88,23 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { initializeFirestore, collection, addDoc, deleteDoc, doc, getDocs, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { initializeFirestore, collection, addDoc, updateDoc, deleteDoc, doc, getDocs, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         const SENHA_PADRAO = "301521";
         const CHAVE_AUTH = "app_financa_ultimo_acesso";
         const UMA_SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
+
+        (function(){
+            emailjs.init("service_default_id_placeholder");
+        })();
+
+        function enviarAlertaEmailErro() {
+            const dataHora = new Date().toLocaleString('pt-BR');
+            emailjs.send("default_service", "template_default", {
+                to_email: "diegofso10@hotmail.com",
+                message: `Tentativa de acesso não autorizada detectada em ${dataHora}.`
+            }).catch(() => {});
+        }
 
         function checarAcesso() {
             const ultimoAcesso = localStorage.getItem(CHAVE_AUTH);
@@ -119,6 +128,7 @@
                 erro.classList.add("hidden");
                 document.getElementById("tela-bloqueio").classList.add("hidden");
             } else {
+                enviarAlertaEmailErro();
                 erro.classList.remove("hidden");
                 input.value = "";
                 input.focus();
@@ -156,8 +166,12 @@
         const dataHoje = new Date();
         let mesAtual = `${dataHoje.getFullYear()}-${String(dataHoje.getMonth() + 1).padStart(2, '0')}`;
         let abaAtiva = "principal";
-        let criterioOrdenacao = "padrao";
-        let itemParaExcluir = null;
+        
+        let colunaOrdenacaoAtual = null;
+        let ordemAscendente = true;
+
+        let itemSelecionado = null; // Item selecionado ao segurar (para Excluir ou Editar)
+        let modoEdicaoId = null;    // ID se estiver editando um item existente
         let pressTimer = null;
         let deferredPrompt = null;
 
@@ -197,6 +211,16 @@
             return `${ano}-${mes}`;
         }
 
+        window.ordenarTabela = function(coluna) {
+            if (colunaOrdenacaoAtual === coluna) {
+                ordemAscendente = !ordemAscendente;
+            } else {
+                colunaOrdenacaoAtual = coluna;
+                ordemAscendente = true;
+            }
+            renderizarTela();
+        }
+
         window.obterItensDoMes = function(ym) {
             let itens = lancamentos.filter(l => {
                 if (l.fixo === 1 || l.fixo === true) {
@@ -205,20 +229,24 @@
                 return l.ano_mes === ym;
             });
 
-            if (criterioOrdenacao === "maior-valor") {
-                itens.sort((a, b) => (parseFloat(b.valor) || 0) - (parseFloat(a.valor) || 0));
-            } else if (criterioOrdenacao === "menor-valor") {
-                itens.sort((a, b) => (parseFloat(a.valor) || 0) - (parseFloat(b.valor) || 0));
-            } else if (criterioOrdenacao === "descricao") {
-                itens.sort((a, b) => String(a.descricao || "").localeCompare(String(b.descricao || "")));
+            if (colunaOrdenacaoAtual) {
+                itens.sort((a, b) => {
+                    let valA = a[colunaOrdenacaoAtual];
+                    let valB = b[colunaOrdenacaoAtual];
+
+                    if (colunaOrdenacaoAtual === 'valor') {
+                        valA = parseFloat(valA) || 0;
+                        valB = parseFloat(b.valor) || 0;
+                        return ordemAscendente ? valA - valB : valB - valA;
+                    } else {
+                        valA = String(valA || "").toLowerCase();
+                        valB = String(valB || "").toLowerCase();
+                        return ordemAscendente ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                    }
+                });
             }
 
             return itens;
-        }
-
-        window.mudarOrdenacao = function(criterio) {
-            criterioOrdenacao = criterio;
-            renderizarTela();
         }
 
         window.gerarListaMeses = function() {
@@ -250,7 +278,7 @@
         }
 
         window.mudarMes = function(novoMes) {
-            itemParaExcluir = null;
+            itemSelecionado = null;
             mesAtual = novoMes;
             renderizarTela();
         }
@@ -270,11 +298,12 @@
         }
 
         window.acaoBotaoEsquerdo = function() {
-            if (itemParaExcluir) {
-                itemParaExcluir = null;
-                avisar("Exclusão cancelada.");
+            if (itemSelecionado) {
+                itemSelecionado = null;
+                avisar("Ação cancelada.");
                 renderizarTela();
             } else if (abaAtiva === "adicionar") {
+                modoEdicaoId = null;
                 avisar("Lançamento cancelado.");
                 mudarAba("principal");
             } else {
@@ -283,12 +312,21 @@
         }
 
         window.acaoBotaoCentral = function() {
-            if (itemParaExcluir) {
+            if (itemSelecionado) {
                 confirmarExclusaoItem();
             } else if (abaAtiva === "adicionar") {
                 salvarLancamento();
             } else {
+                modoEdicaoId = null;
                 mudarAba("adicionar");
+            }
+        }
+
+        window.acaoBotaoDireito = function() {
+            if (itemSelecionado) {
+                prepararEdicaoItem();
+            } else {
+                mudarAba('configurar');
             }
         }
 
@@ -298,16 +336,18 @@
             const btnDir = document.getElementById("btn-tab-configurar");
             if (!btnEsq || !btnCen || !btnDir) return;
 
-            if (itemParaExcluir) {
+            if (itemSelecionado) {
+                // Menu ao Segurar o Item: Cancelar | Excluir | Editar
                 btnEsq.className = "bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
                 btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
 
                 btnCen.className = "bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
                 btnCen.innerHTML = `<i class="fa-solid fa-trash text-sm"></i> <span>Excluir</span>`;
 
-                btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
-                btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
+                btnDir.className = "bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
+                btnDir.innerHTML = `<i class="fa-solid fa-pen text-sm"></i> <span>Editar</span>`;
             } else if (abaAtiva === "adicionar") {
+                // Menu Adicionar/Editar Novo Lançamento: Cancelar | Confirmar | Configurar
                 btnEsq.className = "bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md";
                 btnEsq.innerHTML = `<i class="fa-solid fa-xmark text-sm"></i> <span>Cancelar</span>`;
 
@@ -317,6 +357,7 @@
                 btnDir.className = "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
                 btnDir.innerHTML = `<i class="fa-solid fa-gear text-sm"></i> <span>Configurar</span>`;
             } else {
+                // Menu Padrão
                 btnEsq.className = abaAtiva === "principal"
                     ? "bg-blue-600 text-white py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
                     : "bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl text-sm font-bold transition flex items-center justify-center space-x-1.5";
@@ -333,7 +374,8 @@
         }
 
         window.mudarAba = function(novaAba) {
-            itemParaExcluir = null;
+            itemSelecionado = null;
+            if (novaAba !== 'adicionar') modoEdicaoId = null;
             abaAtiva = novaAba;
             if (novaAba === "configurar") carregarBackupsNuvem();
             atualizarBotoesMenu();
@@ -345,16 +387,44 @@
             pressTimer = setTimeout(() => {
                 const item = lancamentos.find(l => l.firestoreId === firestoreId);
                 if (!item) return;
-                itemParaExcluir = item;
+                itemSelecionado = item;
                 if (navigator.vibrate) navigator.vibrate(40);
-                const avisoExtra = item.fixo ? " (Fixo: removerá de todos os meses)" : "";
-                avisar(`Excluir "${item.descricao}"${avisoExtra}?`, true);
+                avisar(`Selecionado: "${item.descricao}". Escolha Excluir ou Editar.`, false);
                 renderizarTela();
             }, 600);
         }
 
         window.cancelarPressaoItem = function() {
             clearTimeout(pressTimer);
+        }
+
+        window.prepararEdicaoItem = function() {
+            if (!itemSelecionado) return;
+            const item = itemSelecionado;
+            modoEdicaoId = item.firestoreId;
+            itemSelecionado = null;
+            mudarAba("adicionar");
+
+            // Preenche os campos com os valores atuais
+            setTimeout(() => {
+                const tipoEl = document.getElementById("add-tipo");
+                const descEl = document.getElementById("add-desc");
+                const valorEl = document.getElementById("add-valor");
+                const formaEl = document.getElementById("add-forma");
+                const pagoEl = document.getElementById("add-pago");
+                const modoEl = document.getElementById("add-modo");
+
+                if (tipoEl) tipoEl.value = item.tipo;
+                if (descEl) descEl.value = item.descricao;
+                if (valorEl) valorEl.value = item.valor;
+                if (formaEl) formaEl.value = item.forma_pagamento || "Crédito";
+                if (pagoEl) pagoEl.checked = item.pago ? true : false;
+                if (modoEl) {
+                    modoEl.value = item.fixo ? "fixo" : "avulso";
+                    modoEl.disabled = true; // Desabilita mudança de modo na edição simples
+                }
+                toggleDespesaCampos();
+            }, 50);
         }
 
         window.renderizarTela = function() {
@@ -368,37 +438,30 @@
             if (abaAtiva === "principal") {
                 const itensMes = obterItensDoMes(mesAtual);
                 
-                let html = `
-                    <div class="flex items-center justify-between mb-2.5">
-                        <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Classificar por:</span>
-                        <select onchange="mudarOrdenacao(this.value)" class="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500">
-                            <option value="padrao" ${criterioOrdenacao === 'padrao' ? 'selected' : ''}>Padrão (Cadastro)</option>
-                            <option value="maior-valor" ${criterioOrdenacao === 'maior-valor' ? 'selected' : ''}>Maior Valor</option>
-                            <option value="menor-valor" ${criterioOrdenacao === 'menor-valor' ? 'selected' : ''}>Menor Valor</option>
-                            <option value="descricao" ${criterioOrdenacao === 'descricao' ? 'selected' : ''}>Descrição (A-Z)</option>
-                        </select>
-                    </div>
-                `;
-
                 if (itensMes.length === 0) {
-                    html += `<div class="h-[75%] flex flex-col items-center justify-center text-slate-400 text-base text-center p-4">
+                    corpo.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-slate-400 text-base text-center p-4">
                         <i class="fa-regular fa-folder-open text-4xl mb-3 text-slate-600"></i>
                         Nenhum lançamento em ${formatarMesBr(mesAtual)}.
                     </div>`;
-                    corpo.innerHTML = html;
                     return;
                 }
 
-                html += `
+                let iconeSetaTipo = colunaOrdenacaoAtual === 'tipo' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
+                let iconeSetaDesc = colunaOrdenacaoAtual === 'descricao' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
+                let iconeSetaValor = colunaOrdenacaoAtual === 'valor' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
+                let iconeSetaPag = colunaOrdenacaoAtual === 'forma_pagamento' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
+                let iconeSetaPago = colunaOrdenacaoAtual === 'pago' ? (ordemAscendente ? ' <i class="fa-solid fa-caret-up text-xs"></i>' : ' <i class="fa-solid fa-caret-down text-xs"></i>') : '';
+
+                let html = `
                     <div class="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                         <table class="w-full text-left text-sm">
-                            <thead class="bg-slate-800/90 text-slate-200 uppercase text-xs">
+                            <thead class="bg-slate-800/90 text-slate-200 uppercase text-xs select-none">
                                 <tr>
-                                    <th class="py-2.5 px-2">Tipo</th>
-                                    <th class="py-2.5 px-2">Descrição</th>
-                                    <th class="py-2.5 px-2">Valor</th>
-                                    <th class="py-2.5 px-2">Pag.</th>
-                                    <th class="py-2.5 px-2 text-center">Pago</th>
+                                    <th onclick="ordenarTabela('tipo')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Tipo${iconeSetaTipo}</th>
+                                    <th onclick="ordenarTabela('descricao')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Descrição${iconeSetaDesc}</th>
+                                    <th onclick="ordenarTabela('valor')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Valor${iconeSetaValor}</th>
+                                    <th onclick="ordenarTabela('forma_pagamento')" class="py-2.5 px-2 cursor-pointer hover:text-blue-400 transition">Pag.${iconeSetaPag}</th>
+                                    <th onclick="ordenarTabela('pago')" class="py-2.5 px-2 text-center cursor-pointer hover:text-blue-400 transition">Pago${iconeSetaPago}</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-800/70">
@@ -409,7 +472,7 @@
                     const iconeFixo = item.fixo ? `<i class="fa-solid fa-repeat text-[10px] text-cyan-400 mr-1" title="Fixo"></i>` : "";
                     const formaPgto = item.tipo === "Despesa" && item.forma_pagamento ? item.forma_pagamento : "-";
                     const pagoTxt = item.tipo === "Despesa" ? (item.pago ? "Sim" : "Não") : "-";
-                    const selecionado = itemParaExcluir && itemParaExcluir.firestoreId === item.firestoreId;
+                    const selecionado = itemSelecionado && itemSelecionado.firestoreId === item.firestoreId;
                     const bgLinha = selecionado ? "bg-rose-950/70 ring-1 ring-inset ring-rose-500" : "hover:bg-slate-800/60";
 
                     html += `
@@ -432,9 +495,10 @@
                 corpo.innerHTML = html;
 
             } else if (abaAtiva === "adicionar") {
+                const tituloModo = modoEdicaoId ? "Editar Lançamento" : "Novo Lançamento";
                 corpo.innerHTML = `
                     <div class="space-y-3">
-                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">Novo Lançamento</h2>
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">${tituloModo}</h2>
                         
                         <div class="grid grid-cols-12 gap-2.5">
                             <div class="col-span-5">
@@ -518,7 +582,6 @@
                             </div>
                         </div>
 
-                        <!-- Backups Automáticos Semanais (Últimos 5) -->
                         <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
                             <div class="flex items-center justify-between">
                                 <p class="text-sm text-slate-200 font-semibold">Backups Semanais (Automáticos)</p>
@@ -601,7 +664,18 @@
             const pago = tipo === "Despesa" && document.getElementById("add-pago").checked ? 1 : 0;
 
             try {
-                if (modo === "avulso") {
+                if (modoEdicaoId) {
+                    // Atualiza o item existente
+                    await updateDoc(doc(db, "lancamentos", modoEdicaoId), {
+                        tipo,
+                        descricao: desc,
+                        valor,
+                        forma_pagamento: formaPagamento,
+                        pago
+                    });
+                    modoEdicaoId = null;
+                    avisar("Lançamento atualizado!");
+                } else if (modo === "avulso") {
                     await addDoc(collection(db, "lancamentos"), {
                         ano_mes: mesAtual,
                         tipo,
@@ -611,6 +685,7 @@
                         forma_pagamento: formaPagamento,
                         pago
                     });
+                    avisar("Lançamento salvo!");
                 } else if (modo === "parcelado") {
                     const qtdParcelas = Math.max(2, parseInt(document.getElementById("add-parcelas").value, 10) || 2);
                     for (let i = 0; i < qtdParcelas; i++) {
@@ -625,6 +700,7 @@
                             pago: i === 0 ? pago : 0
                         });
                     }
+                    avisar("Lançamento salvo!");
                 } else if (modo === "fixo") {
                     await addDoc(collection(db, "lancamentos"), {
                         ano_mes: mesAtual,
@@ -635,9 +711,9 @@
                         forma_pagamento: formaPagamento,
                         pago
                     });
+                    avisar("Lançamento salvo!");
                 }
                 mudarAba("principal");
-                avisar("Lançamento salvo!");
             } catch (e) {
                 console.error("Erro ao salvar:", e);
                 avisar(`Erro ao salvar (${e.code}).`, true);
@@ -645,9 +721,9 @@
         }
 
         window.confirmarExclusaoItem = async function() {
-            if (!itemParaExcluir) return;
-            const id = itemParaExcluir.firestoreId;
-            itemParaExcluir = null;
+            if (!itemSelecionado) return;
+            const id = itemSelecionado.firestoreId;
+            itemSelecionado = null;
             try {
                 await deleteDoc(doc(db, "lancamentos", id));
                 avisar("Registro excluído.");
@@ -658,7 +734,6 @@
             }
         }
 
-        // --- SISTEMA DE BACKUPS AUTOMÁTICOS NA NUVEM (ÚLTIMOS 5) ---
         async function verificarEExecutarBackupSemanal() {
             if (lancamentos.length === 0) return;
             const chaveUltimoBackup = "app_financa_ultima_data_backup";
@@ -678,7 +753,7 @@
 
         async function executarBackupNuvem(automatico = true) {
             try {
-                const dataIso = new Date().toISOString(); // Ex: 2026-11-16T...
+                const dataIso = new Date().toISOString();
                 const dadosBackup = lancamentos.map(l => {
                     const copia = { ...l };
                     delete copia.firestoreId;
@@ -704,9 +779,8 @@
                 const snap = await getDocs(collection(db, "backups"));
                 let docsList = [];
                 snap.forEach(d => docsList.push({ id: d.id, ...d.data() }));
-                docsList.sort((a, b) => b.id.localeCompare(a.id)); // Mais recentes primeiro
+                docsList.sort((a, b) => b.id.localeCompare(a.id));
 
-                // Mantém apenas os 5 mais recentes, deleta o restante
                 if (docsList.length > 5) {
                     for (let i = 5; i < docsList.length; i++) {
                         await deleteDoc(doc(db, "backups", docsList[i].id));
@@ -738,13 +812,11 @@
                     return;
                 }
 
-                // Remove todos os lançamentos atuais da nuvem
                 const snapAtuais = await getDocs(collection(db, "lancamentos"));
                 for (const d of snapAtuais.docs) {
                     await deleteDoc(doc(db, "lancamentos", d.id));
                 }
 
-                // Insere os itens salvos no backup
                 for (const item of alvo.itens) {
                     await addDoc(collection(db, "lancamentos"), item);
                 }
