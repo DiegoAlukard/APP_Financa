@@ -5,11 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#0f172a">
     <title>Controle Financeiro</title>
+    <!-- Manifesto PWA e Ícone -->
     <link rel="manifest" href="manifest.json">
     <link rel="icon" type="image/svg+xml" href="icon.svg">
     <link rel="apple-touch-icon" href="icon.svg">
+    <!-- Tailwind CSS -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Ícones FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Biblioteca SheetJS para manipulação de arquivos Excel (.xlsx) no navegador -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         html, body {
@@ -87,9 +91,8 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { initializeFirestore, collection, addDoc, deleteDoc, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { initializeFirestore, collection, addDoc, deleteDoc, doc, getDocs, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // --- CONTROLE DE SENHA (PADRÃO: 301521 | VALIDADE: 7 DIAS) ---
         const SENHA_PADRAO = "301521";
         const CHAVE_AUTH = "app_financa_ultimo_acesso";
         const UMA_SEMANA_MS = 7 * 24 * 60 * 60 * 1000;
@@ -149,10 +152,12 @@
         const db = initializeFirestore(app, { experimentalForceLongPolling: true });
 
         let lancamentos = [];
+        let backupsNuvem = [];
         const dataHoje = new Date();
         let mesAtual = `${dataHoje.getFullYear()}-${String(dataHoje.getMonth() + 1).padStart(2, '0')}`;
         let abaAtiva = "principal";
-        let itemParaExcluir = null; // Guarda { firestoreId, descricao, fixo } durante confirmação de exclusão
+        let criterioOrdenacao = "padrao";
+        let itemParaExcluir = null;
         let pressTimer = null;
         let deferredPrompt = null;
 
@@ -164,7 +169,6 @@
             aviso.className = erro ? "truncate font-medium text-rose-400" : "truncate font-medium text-amber-300";
         }
 
-        // Formata numeral estilo BR sem R$ e sem ",00" quando inteiro (ex: 1000 -> "1.000", 5.5 -> "5,50")
         window.formatarValorTabela = function(val) {
             const num = parseFloat(val) || 0;
             const isInteiro = Math.abs(num % 1) < 0.001;
@@ -172,6 +176,13 @@
                 minimumFractionDigits: isInteiro ? 0 : 2,
                 maximumFractionDigits: 2
             });
+        }
+
+        window.formatardataIsoBr = function(isoStr) {
+            if (!isoStr) return "";
+            const [ano, mes, diaHora] = isoStr.split("-");
+            const [dia] = (diaHora || "").split("T");
+            return `${dia}/${mes}/${ano}`;
         }
 
         window.formatarMesBr = function(ym) {
@@ -186,14 +197,28 @@
             return `${ano}-${mes}`;
         }
 
-        // Retorna os itens visíveis no mês selecionado (inclui os avulsos/parcelados do mês + fixos criados neste mês ou anteriores)
         window.obterItensDoMes = function(ym) {
-            return lancamentos.filter(l => {
+            let itens = lancamentos.filter(l => {
                 if (l.fixo === 1 || l.fixo === true) {
                     return l.ano_mes <= ym;
                 }
                 return l.ano_mes === ym;
             });
+
+            if (criterioOrdenacao === "maior-valor") {
+                itens.sort((a, b) => (parseFloat(b.valor) || 0) - (parseFloat(a.valor) || 0));
+            } else if (criterioOrdenacao === "menor-valor") {
+                itens.sort((a, b) => (parseFloat(a.valor) || 0) - (parseFloat(b.valor) || 0));
+            } else if (criterioOrdenacao === "descricao") {
+                itens.sort((a, b) => String(a.descricao || "").localeCompare(String(b.descricao || "")));
+            }
+
+            return itens;
+        }
+
+        window.mudarOrdenacao = function(criterio) {
+            criterioOrdenacao = criterio;
+            renderizarTela();
         }
 
         window.gerarListaMeses = function() {
@@ -310,11 +335,11 @@
         window.mudarAba = function(novaAba) {
             itemParaExcluir = null;
             abaAtiva = novaAba;
+            if (novaAba === "configurar") carregarBackupsNuvem();
             atualizarBotoesMenu();
             renderizarTela();
         }
 
-        // Eventos de Toque Longo (Segurar por 600ms para selecionar exclusão)
         window.iniciarPressaoItem = function(firestoreId) {
             clearTimeout(pressTimer);
             pressTimer = setTimeout(() => {
@@ -343,15 +368,28 @@
             if (abaAtiva === "principal") {
                 const itensMes = obterItensDoMes(mesAtual);
                 
+                let html = `
+                    <div class="flex items-center justify-between mb-2.5">
+                        <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Classificar por:</span>
+                        <select onchange="mudarOrdenacao(this.value)" class="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 font-semibold focus:outline-none focus:border-blue-500">
+                            <option value="padrao" ${criterioOrdenacao === 'padrao' ? 'selected' : ''}>Padrão (Cadastro)</option>
+                            <option value="maior-valor" ${criterioOrdenacao === 'maior-valor' ? 'selected' : ''}>Maior Valor</option>
+                            <option value="menor-valor" ${criterioOrdenacao === 'menor-valor' ? 'selected' : ''}>Menor Valor</option>
+                            <option value="descricao" ${criterioOrdenacao === 'descricao' ? 'selected' : ''}>Descrição (A-Z)</option>
+                        </select>
+                    </div>
+                `;
+
                 if (itensMes.length === 0) {
-                    corpo.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-slate-400 text-base text-center p-4">
+                    html += `<div class="h-[75%] flex flex-col items-center justify-center text-slate-400 text-base text-center p-4">
                         <i class="fa-regular fa-folder-open text-4xl mb-3 text-slate-600"></i>
                         Nenhum lançamento em ${formatarMesBr(mesAtual)}.
                     </div>`;
+                    corpo.innerHTML = html;
                     return;
                 }
 
-                let html = `
+                html += `
                     <div class="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                         <table class="w-full text-left text-sm">
                             <thead class="bg-slate-800/90 text-slate-200 uppercase text-xs">
@@ -398,7 +436,6 @@
                     <div class="space-y-3">
                         <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">Novo Lançamento</h2>
                         
-                        <!-- Linha 1: Tipo (Despesa por padrão) + Descrição -->
                         <div class="grid grid-cols-12 gap-2.5">
                             <div class="col-span-5">
                                 <label class="text-sm text-slate-300 font-semibold">Tipo</label>
@@ -413,7 +450,6 @@
                             </div>
                         </div>
 
-                        <!-- Linha 2: Valor + Modo de Lançamento -->
                         <div class="grid grid-cols-12 gap-2.5">
                             <div class="col-span-5">
                                 <label class="text-sm text-slate-300 font-semibold">Valor</label>
@@ -429,13 +465,11 @@
                             </div>
                         </div>
 
-                        <!-- Campo Condicional de Parcelas -->
                         <div id="campo-parcelas" class="hidden bg-slate-950/50 p-3 rounded-xl border border-slate-800">
                             <label class="text-sm text-slate-300 font-semibold">Quantidade de Meses / Parcelas</label>
                             <input type="number" min="2" max="120" inputmode="numeric" id="add-parcelas" value="2" class="w-full mt-1 bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-base text-slate-100 focus:outline-none focus:border-blue-500">
                         </div>
                         
-                        <!-- Linha 3 (Despesa - Visível por padrão): Forma de Pagamento + Pago -->
                         <div id="campos-despesa" class="space-y-3 bg-slate-950/50 p-3.5 rounded-xl border border-slate-800">
                             <div>
                                 <label class="text-sm text-slate-300 font-semibold">Forma de Pagamento</label>
@@ -454,6 +488,20 @@
                     </div>
                 `;
             } else if (abaAtiva === "configurar") {
+                let htmlBackups = '';
+                if (backupsNuvem.length === 0) {
+                    htmlBackups = `<p class="text-xs text-slate-400 italic">Nenhum backup automático na nuvem ainda.</p>`;
+                } else {
+                    backupsNuvem.forEach((b) => {
+                        htmlBackups += `
+                            <div class="flex items-center justify-between bg-slate-900 p-2.5 rounded-lg border border-slate-800 text-xs">
+                                <span class="text-slate-300 font-medium"><i class="fa-solid fa-cloud text-blue-400 mr-1.5"></i> ${formatardataIsoBr(b.id)}</span>
+                                <button onclick="restaurarBackupNuvem('${b.id}')" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-semibold transition">Restaurar</button>
+                            </div>
+                        `;
+                    });
+                }
+
                 corpo.innerHTML = `
                     <div class="space-y-4">
                         <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300">Configurações e Dados</h2>
@@ -470,6 +518,17 @@
                             </div>
                         </div>
 
+                        <!-- Backups Automáticos Semanais (Últimos 5) -->
+                        <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <p class="text-sm text-slate-200 font-semibold">Backups Semanais (Automáticos)</p>
+                                <button onclick="gerarBackupManual()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-2.5 py-1 rounded-lg font-medium border border-slate-700 transition">Forçar Backup</button>
+                            </div>
+                            <div class="space-y-2 max-h-40 overflow-y-auto">
+                                ${htmlBackups}
+                            </div>
+                        </div>
+
                         <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
                             <p class="text-sm text-slate-200 font-semibold">Gerenciar Planilha Excel (.xlsx)</p>
                             <div class="grid grid-cols-2 gap-2.5">
@@ -483,7 +542,7 @@
                         </div>
 
                         <div class="bg-slate-950/50 p-3.5 rounded-xl border border-slate-800 space-y-3">
-                            <p class="text-sm text-slate-200 font-semibold">Backup Completo (JSON)</p>
+                            <p class="text-sm text-slate-200 font-semibold">Backup Completo (JSON Local)</p>
                             <div class="grid grid-cols-2 gap-2.5">
                                 <button onclick="exportarBackup()" class="bg-slate-800 hover:bg-slate-700 text-slate-100 py-3 px-3 rounded-xl text-sm font-semibold transition border border-slate-700 flex items-center justify-center space-x-1.5">
                                     <i class="fa-solid fa-download text-amber-400"></i> <span>Exportar JSON</span>
@@ -520,7 +579,6 @@
             }
         }
 
-        // Soma N meses a uma string "YYYY-MM"
         function somarMeses(ym, adicionar) {
             const [anoStr, mesStr] = ym.split("-");
             const data = new Date(parseInt(anoStr, 10), parseInt(mesStr, 10) - 1 + adicionar, 1);
@@ -568,7 +626,6 @@
                         });
                     }
                 } else if (modo === "fixo") {
-                    // Salva um único registro mestre com fixo: 1 (aparece neste mês e em todos os futuros até ser excluído)
                     await addDoc(collection(db, "lancamentos"), {
                         ano_mes: mesAtual,
                         tipo,
@@ -598,6 +655,105 @@
             } catch (e) {
                 avisar(`Erro ao excluir (${e.code}).`, true);
                 renderizarTela();
+            }
+        }
+
+        // --- SISTEMA DE BACKUPS AUTOMÁTICOS NA NUVEM (ÚLTIMOS 5) ---
+        async function verificarEExecutarBackupSemanal() {
+            if (lancamentos.length === 0) return;
+            const chaveUltimoBackup = "app_financa_ultima_data_backup";
+            const ultimoBackupStr = localStorage.getItem(chaveUltimoBackup);
+            const agora = Date.now();
+            const seteDiasMs = 7 * 24 * 60 * 60 * 1000;
+
+            if (!ultimoBackupStr || (agora - parseInt(ultimoBackupStr, 10)) >= seteDiasMs) {
+                await executarBackupNuvem(true);
+            }
+        }
+
+        window.gerarBackupManual = async function() {
+            await executarBackupNuvem(false);
+            carregarBackupsNuvem();
+        }
+
+        async function executarBackupNuvem(automatico = true) {
+            try {
+                const dataIso = new Date().toISOString(); // Ex: 2026-11-16T...
+                const dadosBackup = lancamentos.map(l => {
+                    const copia = { ...l };
+                    delete copia.firestoreId;
+                    return copia;
+                });
+
+                await setDoc(doc(db, "backups", dataIso), {
+                    data: dataIso,
+                    itens: dadosBackup
+                });
+
+                localStorage.setItem("app_financa_ultima_data_backup", String(Date.now()));
+                if (!automatico) avisar("Backup semanal gerado com sucesso!");
+                await limparBackupsAntigos();
+            } catch (e) {
+                console.error("Erro ao gerar backup:", e);
+                if (!automatico) avisar("Erro ao gerar backup na nuvem.", true);
+            }
+        }
+
+        async function limparBackupsAntigos() {
+            try {
+                const snap = await getDocs(collection(db, "backups"));
+                let docsList = [];
+                snap.forEach(d => docsList.push({ id: d.id, ...d.data() }));
+                docsList.sort((a, b) => b.id.localeCompare(a.id)); // Mais recentes primeiro
+
+                // Mantém apenas os 5 mais recentes, deleta o restante
+                if (docsList.length > 5) {
+                    for (let i = 5; i < docsList.length; i++) {
+                        await deleteDoc(doc(db, "backups", docsList[i].id));
+                    }
+                }
+            } catch (e) {
+                console.error("Erro ao limpar backups antigos:", e);
+            }
+        }
+
+        async function carregarBackupsNuvem() {
+            try {
+                const snap = await getDocs(collection(db, "backups"));
+                backupsNuvem = [];
+                snap.forEach(d => backupsNuvem.push({ id: d.id, ...d.data() }));
+                backupsNuvem.sort((a, b) => b.id.localeCompare(a.id));
+                if (abaAtiva === "configurar") renderizarTela();
+            } catch (e) {
+                console.error("Erro ao carregar lista de backups:", e);
+            }
+        }
+
+        window.restaurarBackupNuvem = async function(backupId) {
+            if (!confirm(`Deseja restaurar o backup de ${formatardataIsoBr(backupId)}? Os dados atuais serão substituídos.`)) return;
+            try {
+                const alvo = backupsNuvem.find(b => b.id === backupId);
+                if (!alvo || !alvo.itens) {
+                    avisar("Backup não encontrado.", true);
+                    return;
+                }
+
+                // Remove todos os lançamentos atuais da nuvem
+                const snapAtuais = await getDocs(collection(db, "lancamentos"));
+                for (const d of snapAtuais.docs) {
+                    await deleteDoc(doc(db, "lancamentos", d.id));
+                }
+
+                // Insere os itens salvos no backup
+                for (const item of alvo.itens) {
+                    await addDoc(collection(db, "lancamentos"), item);
+                }
+
+                avisar("Backup restaurado com sucesso!");
+                mudarAba("principal");
+            } catch (e) {
+                console.error("Erro ao restaurar backup:", e);
+                avisar("Erro ao restaurar backup.", true);
             }
         }
 
@@ -715,6 +871,8 @@
                 lancamentos.push({ firestoreId: d.id, ...d.data() });
             });
             renderizarTela();
+            verificarEExecutarBackupSemanal();
+            carregarBackupsNuvem();
             avisar("Sincronizado (Firebase).");
         }, (error) => {
             console.error("Erro Firebase:", error);
